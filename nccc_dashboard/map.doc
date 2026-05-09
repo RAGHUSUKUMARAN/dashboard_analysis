@@ -1,0 +1,204 @@
+# ================= MAP =================
+def threat_map(data):
+    """
+    Fully offline threat map using Plotly's BUNDLED natural earth topojson.
+
+    Rules that keep it offline:
+      - go.Choropleth  : country fills from bundled topojson, no CDN call.
+      - go.Scattergeo  : bubbles onto choropleth base, also bundled.
+      - resolution=110 : 110 m dataset ships inside the plotly wheel.
+      - projection_type="natural earth": bundled data, no tile server.
+      - NO mapbox, NO external URLs.
+
+    IMPORTANT: do NOT pass this figure through apply_dark_theme() in
+    callbacks.py — that helper overwrites paper_bgcolor and resets geo
+    subplot colours, which blanks the map.  The charts() callback must
+    return the threat_map figure directly without wrapping it.
+    """
+
+    # ── Input normalisation ───────────────────────────────────────────────
+    try:
+        if isinstance(data, pd.DataFrame):
+            df = data.copy()
+        elif isinstance(data, dict):
+            df = pd.DataFrame([{"country": k, "count": v}
+                                for k, v in data.items()])
+        else:
+            return empty_chart("Threat Map")
+    except Exception as e:
+        print("[MAP ERROR] data conversion:", e)
+        return empty_chart("Threat Map")
+
+    if df is None or df.empty:
+        return go.Figure().update_layout(
+            paper_bgcolor="#020617",
+            margin=dict(l=0, r=0, t=0, b=0)
+        )
+
+    if "country" not in df.columns or "count" not in df.columns:
+        return empty_chart("Threat Map")
+
+    # ── Clean ─────────────────────────────────────────────────────────────
+    df = df.dropna(subset=["country", "count"]).copy()
+    df["country"] = df["country"].astype(str).str.upper().str.strip()
+    df["count"]   = pd.to_numeric(df["count"], errors="coerce")
+    df = df.dropna(subset=["count"])
+
+    # ── ISO-2 → ISO-3 ─────────────────────────────────────────────────────
+    ISO_MAP = {
+        "IN": "IND", "US": "USA", "DE": "DEU", "CA": "CAN",
+        "GB": "GBR", "FR": "FRA", "NL": "NLD", "CN": "CHN",
+        "RU": "RUS", "PK": "PAK", "AU": "AUS", "JP": "JPN",
+        "BG": "BGR", "SE": "SWE", "GR": "GRC", "CH": "CHE",
+        "KR": "KOR", "HK": "HKG", "PL": "POL", "PT": "PRT",
+        "ID": "IDN", "VN": "VNM", "IE": "IRL", "SG": "SGP",
+        "BR": "BRA", "ZA": "ZAF", "MX": "MEX", "TR": "TUR",
+        "IT": "ITA", "ES": "ESP", "UA": "UKR", "IR": "IRN",
+        "SA": "SAU", "TH": "THA", "MY": "MYS", "NG": "NGA",
+        "EG": "EGY", "AR": "ARG", "CL": "CHL", "PH": "PHL",
+        "BD": "BGD", "MM": "MMR", "KZ": "KAZ", "UZ": "UZB",
+        "RO": "ROU", "CZ": "CZE", "HU": "HUN", "AT": "AUT",
+        "BE": "BEL", "FI": "FIN", "NO": "NOR", "DK": "DNK",
+        "IL": "ISR", "AE": "ARE", "QA": "QAT", "KW": "KWT",
+        "LK": "LKA", "NP": "NPL", "AF": "AFG",
+    }
+
+    df["iso3"] = df["country"].map(
+        lambda x: ISO_MAP.get(x, x if len(x) == 3 else None)
+    )
+    df = df.dropna(subset=["iso3"])
+    df = df[df["iso3"].str.len() == 3]
+
+    if df.empty:
+        df = pd.DataFrame({
+            "iso3": ["USA"],
+            "count": [0]
+        })
+
+    df = df.groupby("iso3", as_index=False)["count"].sum()
+    max_count = max(df["count"].max(), 1)
+
+    # ── Build figure ──────────────────────────────────────────────────────
+    try:
+        fig = go.Figure()
+        fig.layout.template = None 
+
+        # 🔥 BASE WORLD LAYER (CRITICAL FIX)
+        fig.add_trace(go.Choropleth(
+            locations=["USA"],   # dummy country
+            z=[0],
+            locationmode="ISO-3",
+            colorscale=[[0, "#020617"], [1, "#020617"]],
+            showscale=False,
+            hoverinfo="skip"
+        ))
+        # Layer 1 — choropleth fill (bundled topojson, fully offline)
+        fig.add_trace(go.Choropleth(
+            locations=df["iso3"],
+            z=df["count"],
+            locationmode="ISO-3",
+            colorscale=[
+                [0.00, "#020617"],
+                [0.15, "#003f5c"],
+                [0.40, "#00bcd4"],
+                [0.70, "#00ffff"],
+                [1.00, "#00ff9f"],
+            ],
+            zmin=0,
+            zmax=max_count,
+            marker=dict(line=dict(color="#00ffff", width=0.8)),
+            colorbar=dict(
+                title=dict(text="Attacks", font=dict(color="white", size=10)),
+                tickfont=dict(color="white", size=9),
+                thickness=8, len=0.55, x=1.01,
+            ),
+            showscale=True,
+            hovertemplate="<b>%{location}</b><br>Attacks: %{z:,}<extra></extra>",
+        ))
+
+        # Layer 2 — bubble overlay (also fully offline)
+        fig.add_trace(go.Scattergeo(
+            locations=df["iso3"],
+            locationmode="ISO-3",
+            text=df["iso3"],
+            marker=dict(
+                size=((df["count"] / max_count) ** 0.45) * 35 + 5,
+                color=df["count"],
+                colorscale=[
+                    [0.0, "rgba(0,200,255,0.3)"],
+                    [1.0, "rgba(0,255,159,0.85)"],
+                ],
+                showscale=False,
+                line=dict(color="rgba(0,255,255,0.6)", width=0.8),
+                opacity=0.85,
+            ),
+            hovertemplate="<b>%{text}</b><br>Attacks: %{marker.color:,}<extra></extra>",
+            showlegend=False,
+        ))
+
+        # ── Geo settings — OFFLINE SAFE ───────────────────────────────────
+        # resolution=110 ships inside plotly, zero network calls.
+        fig.update_geos(
+            projection_type="natural earth",
+            resolution=110,
+
+            showland=True,
+            landcolor="white",          # ✅ lighter than bg
+
+            showocean=True,
+            oceancolor="#020617",
+
+            showcountries=True,
+            countrycolor="#00ffff",
+            countrywidth=0.6,
+
+            showcoastlines=True,
+            coastlinecolor="#00ffff",
+            coastlinewidth=0.7,
+
+            showframe=False,
+            bgcolor="#020617",
+
+            fitbounds=False,
+            center=dict(lat=20, lon=0),
+        )
+
+        # ── Layout ────────────────────────────────────────────────────────
+        # paper_bgcolor must stay as _MAP_BG so the geo subplot is visible.
+        # Do NOT wrap this figure in apply_dark_theme() in callbacks.py.
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            paper_bgcolor="#020617",
+
+            font=dict(color=TEXT, family="'Courier New', monospace"),
+        )
+
+        fig.add_annotation(
+            text=f"● {len(df)} sources",
+            x=0.01, y=0.02,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(color="lime", size=10, family="'Courier New', monospace")
+        )
+        print("[MAP FINAL CHECK] returning figure with", len(df), "countries")
+        return fig
+
+    except Exception as e:
+        print("[MAP ERROR] map build failed:", e)
+
+        # Offline-safe fallback bar chart
+        df_s = df.sort_values("count", ascending=True).tail(15)
+        fb = go.Figure(go.Bar(
+            x=df_s["count"], y=df_s["iso3"],
+            orientation="h",
+            marker=dict(color="#00ffff"),
+            text=df_s["count"], textposition="outside",
+        ))
+        fb.update_layout(
+            paper_bgcolor=_PAPER, plot_bgcolor=_PLOT,
+            font=dict(color=TEXT, family="'Courier New', monospace"),
+            margin=dict(l=20, r=40, t=10, b=10),
+            title=dict(text="Threat Origins (map unavailable)",
+                       font=dict(color=TEXT, size=12)),
+        )
+        return fb

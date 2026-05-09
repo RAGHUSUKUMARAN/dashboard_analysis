@@ -1,0 +1,15 @@
+.sidebar-item:hover {
+    background: #111827;
+    color: white;
+}
+
+.hamburger-btn:hover {
+    background: rgba(0,255,255,0.12);
+    box-shadow: 0 0 12px rgba(0,255,255,0.35);
+    transform: scale(1.05);
+}
+
+.hamburger-btn:active {
+    transform: scale(0.95);
+    box-shadow: 0 0 6px rgba(0,255,255,0.2);
+}
